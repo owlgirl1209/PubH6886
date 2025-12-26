@@ -1,0 +1,678 @@
+---
+title: "SML Term Project Data"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+---
+
+```{r libraries}
+#| output: FALSE
+library(tidyverse)
+library(caret)
+library(splines)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(gbm)
+library(leaps)
+library(glmnet)
+library(pls)
+library(plotmo)
+library(gridExtra)
+library(kernlab)
+library(nnet)
+library(NeuralNetTools)
+library(neuralnet)
+#library(survival)
+```
+
+```{r Creating DataFrame} 
+# --- Load cell cluster means from file ---
+cell_clusters <- read.table("CellClusterInfo.txt", header=TRUE, 
+                            sep="\t", stringsAsFactors=FALSE)
+
+set.seed(1234)
+n <- 400
+
+# --- Simulate patient characteristics ---
+id <- 1:n
+age <- round(runif(n, min=5, max=80))
+# 1 is male, 0 is female
+sex <- sample(c(0,1), n, replace=TRUE) 
+# 0 is White, 1 Non-White
+race <- sample(c(0, 1), n, replace=TRUE,
+               prob=c(0.65, 0.35))
+# primary tumor site: 2 - lower-extremity, 1 - upper-extremity, 0 - spine/pelvis
+tumor <- sample(c(2, 1, 0),
+                n, replace=TRUE,  prob = c(0.4, 0.4, 0.2))
+# 1 is yes, 0 is no
+surgery <- sample(c(1, 0), n, replace=TRUE, prob=c(0.68, 0.32))
+# chemo <- ifelse((surgery == 0),
+#                        sample(c(1, 0), n, replace=TRUE,
+#                               prob=c(0.65, 0.35)),
+#                        0)
+# # #chemo <- sample(c("Yes", "No"), n, replace=TRUE, prob=c(0.85, 0.15))
+# radiation <- ifelse((surgery == 0 & chemo == 0), 1, 0)
+# 
+# # a loop that creates a single treatment variable
+# treatment <- numeric(n)
+# for (i in 1:n){
+#   if (surgery[i] == 0 && chemo[i] == 0 && radiation[i] == 1){
+#     treatment[i] <- 0 # those who had radiation are baseline (0)
+#   }
+#   else if (surgery[i] == 0 && chemo[i] == 1 && radiation[i] == 0) {
+#     treatment[i] <- 1 # those who had chemo are assigned level one (1)
+#   }
+#   else if (surgery[i] == 1 && chemo[i] == 0 && radiation[i] == 0){
+#     treatment[i] <- 2 # those who had surgery are assigned level one (2)
+#   }
+# }
+#chemo <- sample(c("Yes", "No"), n, replace=TRUE, prob=c(0.85, 0.15))
+#radiation <- sample(c("Yes", "No"), n, replace=TRUE, prob=c(0.2, 0.8))
+# year of diagnosis
+year <- sample(2000:2018, n, replace=TRUE)
+
+# median age
+ageMed <- median(age)
+# --- Simulate cell cluster variables ---
+num_clusters <- nrow(cell_clusters)
+cluster_names <- cell_clusters$Cluster
+cluster_means <- cell_clusters$mean
+
+# Each subject gets a value for each cluster, 
+# gamma distribution with given mean, alpha = 2, b = given mean/alpha
+cluster_mat_gamma <- sapply(cluster_means, 
+                            function(mu) rgamma(n, shape = 2, scale = mu/2))
+colnames(cluster_mat_gamma) <- cluster_names
+
+# --- Randomly select some clusters to associate with vital status ---
+set.seed(6886)
+num_risk_clusters <- 5
+risk_clusters <- sample(cluster_names, num_risk_clusters)
+#cat("Risk clusters chosen:", paste(risk_clusters, collapse=", "), "\n")
+
+# Calculate risk score based on risk clusters
+risk_score <- rowSums(cluster_mat_gamma[, risk_clusters])
+# Use risk_score to affect both survival time and vital status
+
+
+# Probability of death increases with risk_score (logistic)
+logit_p <- -0.5 + 2*risk_score + age ^ (1/4) - exp(tumor) - 0.75*surgery
+prob_deceased <- 1/(1+exp(-logit_p))
+
+# Scaling numerical predictors after risk score is found
+cluster_mat_gamma <- scale(cluster_mat_gamma)
+age <- scale(age)
+
+# vital status, 1 -> dead, 0 -> alive
+status <- ifelse(runif(n) < prob_deceased, 0, 1)
+
+# --- Assemble final data frame ---
+SML_data <- data.frame(id, year, age, sex, race, 
+                       tumor, surgery,  cluster_mat_gamma, status) %>%
+  mutate(surgery = factor(surgery, levels = c(0,1)),
+         status = factor(status, levels = c(0,1), labels = c("Alive", "Dead")),
+         race = factor(race, levels = c(0,1)),
+         sex = factor(sex, levels = c(0,1)),
+         tumor = factor(tumor, levels = c(0,1,2))) 
+
+testing <- data.frame(cluster_mat_gamma, status)
+testing2 <- SML_data[3:7] %>%
+  mutate(status = status)
+statusTab <- table(SML_data$status)
+# View first few rows
+# head(SML_data)
+# str(SML_data)
+
+# new data frame without id and year of diagnosis
+new_SMLdata <- SML_data[3:53]
+
+# since the predictors are a mix of numerical and categorical variables,
+# it is simplest to set up a model matrix that converts categorical variables
+#  to sets of dummy variables
+f1 <- formula(status ~ .)
+mf <- model.frame(f1, data = new_SMLdata)
+SML_x <- model.matrix(mf, data = new_SMLdata)[,-1]
+SML_y <- SML_data$status
+# need the predictors to be in a matrix
+# predMat <- as.matrix(SML_data[3:52])
+```
+
+```{r logistic regression w/ model matrix}
+# setting the seed
+set.seed(1234)
+# the 10-fold CV of the logistic model
+lmReg <- train(x = SML_x, y = SML_y, method = "glm",
+               family = binomial(link = "logit"),
+               trControl = trainControl(method = "cv", number = 10,
+                                        savePredictions = TRUE,
+                                        classProbs = TRUE,
+                                        summaryFunction = twoClassSummary))
+lmReg
+
+# the sequence of threshold values
+prob_thresh <- seq(0.1, 0.9, by = 0.1)
+# finds which threshold results in the best model
+(lmReg_thresh <- thresholder(lmReg, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- lmReg_thresh$Sensitivity[i] + lmReg_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(lmReg_thresh$Accuracy)
+```
+
++ Using 10-fold CV for a logistic regression model with a threshold of 0.50, the model chosen  accuracy = 0.7576329, Cohen's $\kappa = 0.5087244$, sensitivity = 0.7525735, specificity = 0.7601449
+
++ Using 10-fold CV for a logistic regression model, the model that is best with respect to the sum of sensitivity and specificity has a threshold of 0.1. accuracy = 0.7802033, Cohen's $\kappa = 0.5772490$, sensitivity = 0.9525735, specificity = 0.6576087
+
++ Using 10-fold CV for a logistic regression model, the model that is best with respect to accuracy has a threshold of 0.2. accuracy = 0.7826454, Cohen's $\kappa = 0.5751132$, sensitivity = 0.8970588, specificity = 0.7001812
+
+
+```{r logistic regression with ridge penalty}
+# setting the seed
+set.seed(1234)
+
+# using glmnet() to obtain a grid of tuning (lambda) parameters
+lmReg_ridge <- glmnet(x = SML_x, y = SML_y, alpha = 0, 
+                   family = "binomial")
+
+# plot solution paths
+plot_glmnet(lmReg_ridge, xvar = "lambda")
+# uses the lambdas from lmReg_ridge to create a tuning grid for train()
+lmReg_ridge_TG <- data.frame(alpha = 0, lambda = lmReg_ridge$lambda)
+# the 10-fold cv using train() to determine optimal lambda 
+set.seed(1234)
+lmReg_ridge_train <- train(x = SML_x, y = SML_y,
+                           method = "glmnet", family = "binomial", 
+                           tuneGrid = lmReg_ridge_TG,
+                           trControl = trainControl(method = "cv", number = 10,
+                                              classProbs = TRUE,
+                                              selectionFunction = "best",
+                                              savePredictions = TRUE))
+# lmReg_ridge_train
+# finds which threshold results in the best model
+(lmReg_ridge_thresh <- thresholder(lmReg_ridge_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- lmReg_ridge_thresh$Sensitivity[i] + 
+    lmReg_ridge_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(lmReg_ridge_thresh$Accuracy)
+```
+
++ Using 10-fold CV for a logistic regression model with a ridge penalty and a threshold of 0.50, the best model has a $\lambda$ value of $0.03738531$. The model chosen has accuracy = 0.7501970, Cohen's $\kappa = 0.49897457$, sensitivity = 0.77132353, specificity = 0.7344203. From the graph, accounting for all present variables, tumor2 and tumor1 are the most important variables.
+
++ Using 10-fold CV for a logistic regression model with a ridge penalty and a $\lambda$ of $0.03738531$, the model that is best with respect to the sum of sensitivity and specificity has a threshold of 0.3. This is also the best model with respect to accuracy. accuracy = 0.7926517, Cohen's $\kappa = 0.60121056$, sensitivity = 0.95808824, specificity = 0.6742754
+
+```{r logistic regression with LASSO penalty}
+# setting the seed
+set.seed(1234)
+# using glmnet() to obtain a grid of tuning (lambda) parameters
+lmReg_lasso <- glmnet(x = SML_x, y = SML_y, alpha = 1, 
+                   family = "binomial")
+
+# plot solution paths
+plot_glmnet(lmReg_lasso, xvar = "lambda")
+# uses the lambdas from q2_ridge to create a tuning grid for train()
+lmReg_lasso_TG <- data.frame(alpha = 1, lambda = lmReg_lasso$lambda)
+# the 10-fold cv using train() to determine optimal lambda 
+set.seed(1234)
+lmReg_lasso_train <- train(x = SML_x, y = SML_y,
+                           method = "glmnet", family = "binomial", 
+                           tuneGrid = lmReg_lasso_TG,
+                           trControl = trainControl(method = "cv", number = 10,
+                                              classProbs = TRUE,
+                                              selectionFunction = "best",
+                                              savePredictions = TRUE))
+lmReg_lasso_train
+# finds which threshold results in the best model
+(lmReg_lasso_thresh <- thresholder(lmReg_lasso_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- lmReg_lasso_thresh$Sensitivity[i] + 
+    lmReg_lasso_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(lmReg_lasso_thresh$Accuracy)
+```
+
++ Using 10-fold CV for a logistic regression model with a LASSO penalty, the best model has a $\lambda$ value of $0.03738531$ and a threshold of 0.50. The model chosen has accuracy = 0.7950876, Cohen's $\kappa = 0.60723$, sensitivity = 0.9823529, specificity = 0.661594. From the graph, accounting for all present variables, tumor2 and tumor1 are the most important variables.
+
++ Using 10-fold CV for a logistic regression model with a LASSO penalty and a $\lambda$ value of $0.187416$, models with thresholds of 0.3, 0.4, and 0.5 are all equivalent when it comes to accuracy, Cohen's $\kappa$, sensitivity, and specificity. 
+
+
+```{r Decision Classification Tree}
+# setting the seed
+set.seed(1234)
+# classification tree
+class_tree <- rpart(f1, data = new_SMLdata, method = "class",
+                  parms = list(split = "gini"),
+                  control = rpart.control(minsplit = 30,
+                                          minbucket = 5,
+                                          xval = 10))
+class_tree
+printcp(class_tree)
+plotcp(class_tree)
+
+# create tuning grid from alphas chosen from rpart
+class_tree_tg <- data.frame(cp = class_tree$cptable[,1])
+
+set.seed(1234)
+#running the train() function
+class_tree_train <- train(x = SML_x, y = SML_y, method = "rpart",
+                        parms = list(split = "gini"),
+                        control = rpart.control(minsplit = 30, 
+                                                minbucket = 5),
+                        tuneGrid = class_tree_tg,
+                        trControl = trainControl(method = "cv", number = 10,
+                                                classProbs = TRUE,
+                                              selectionFunction = "best",
+                                              savePredictions = TRUE))
+class_tree_train
+# a plot of the classification tree
+rpart.plot(class_tree_train$finalModel)
+
+# finds which threshold results in the best model
+(class_tree_thresh <- thresholder(class_tree_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- class_tree_thresh$Sensitivity[i] + 
+    class_tree_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(class_tree_thresh$Accuracy)
+
+
+```
+
++ The five significant cells clusters are PD-L1+ Macrophages, Memory Cytotoxic T cells, CD21+ B cells, PDPN+ CD21+ B cells, and IDO1+ HLA-DR+ cells. Two addition significant variables: age and tumor location. The variables actually used in classification tree construction were Cytotoxic T cells, PD-1+ Cytotoxic T cells PD-1+ ICOS+ Tregs, and tumor. Only correctly got tumor (tumor2). 
+
++ Using 10-fold CV for a classification tree, the best model has an $\alpha$ value of $0.06428571$ and a threshold of 0.50. The model chosen has accuracy = 0.7826517, Cohen's $\kappa = 0.5740344$, sensitivity = 0.90330882, specificity = 0.6961957	
+
++ Using 10-fold CV for a classification tree, and an $\alpha$ value of $0.03915663$, models with thresholds of 0.1, 0.2, and 0.3 are all equivalent when it comes to accuracy, Cohen's $\kappa$, sensitivity, and specificity. accuracy = 0.7950876, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942. The three thresholds are the best in terms of the sum of sensitivity and specificity, and in terms of accuracy. 
+
++ Tumor2 seems to be the most important predict of all 52. This is also found in the bagging with classification trees model. 
+
+
+```{r Bagging with Trees}
+# setting the seed
+set.seed(1234)
+bagging_forest <- randomForest(f1, data = new_SMLdata, ntree = 1000, 
+                               mtry = 50, importance = TRUE)
+bagging_forest
+
+plot(x = 1:1000, y = bagging_forest$err.rate[,1], 
+     xlab = "Number of Trees: B", ylab = "OOB Error Rate")
+
+set.seed(1234)
+bagging_forest_train <- train(x = SML_x, y = SML_y, method = "rf", ntree = 500,
+                        tuneGrid = data.frame(mtry = 51),
+                        trControl = trainControl(method = "cv", number = 10,
+                                                classProbs = TRUE,
+                                              selectionFunction = "best",
+                                              savePredictions = TRUE))
+bagging_forest_train$finalModel
+
+varImpPlot(bagging_forest_train$finalModel, type = 2, main = "")
+
+# finds which threshold results in the best model
+(bagging_forest_thresh <- thresholder(bagging_forest_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- bagging_forest_thresh$Sensitivity[i] + 
+    bagging_forest_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(bagging_forest_thresh$Accuracy)
+#bagging_forest_thresh
+
+```
+
++ Using 10-fold CV for a bagging with classification trees model, the best model used all 52 predictors and a threshold of 0.50. The model chosen has accuracy = 0.7775266, Cohen's $\kappa = 0.56686648$, sensitivity = 0.91507353, specificity = 0.6788043. Compared to all other predictors in the model, tumor2 was by far the most important predictor. 
+
++ Using 10-fold CV for a bagging with classification trees model, using all 52 predictors, the threshold level that performed best with respect to the sum of sensitivity and specificity was 0.2, accuracy = 0.7877095, Cohen's $\kappa = 0.59371785$, sensitivity = 0.98235294, specificity = 0.6490942. This was also the best model with respect to accuracy. 
+
+```{r Random Forest for Classification}
+set.seed(1234)
+rforest_train <- train(x = SML_x, y = SML_y, method = "rf", ntree = 500,
+                        tuneGrid = data.frame(mtry = 1:51),
+                        trControl = trainControl(method = "cv", number = 10,
+                                                classProbs = TRUE,
+                                              selectionFunction = "best",
+                                              savePredictions = TRUE))
+rforest_train$finalModel
+
+varImpPlot(rforest_train$finalModel, type = 2, main = "")
+
+# finds which threshold results in the best model
+(rforest_thresh <- thresholder(rforest_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- rforest_thresh$Sensitivity[i] + rforest_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(rforest_thresh$Accuracy)
+```
+
++ Using 10-fold CV for a random forest for classifications model, the best model used 44 predictors and a threshold of 0.50. The model chosen has accuracy = 0.7775266, Cohen's $\kappa = 0.56686648$, sensitivity = 0.91507353, specificity = 0.6788043. Compared to all other predictors in the model, tumor2 is still by far the most important predictor. 
+
++ Using 10-fold CV for a bagging with classification trees model, using 22 predictors, the threshold level that performed best with respect to the sum of sensitivity and specificity is 0.3, accuracy = 0.7950876, Cohen's $\kappa = 0.607230017$, sensitivity = 0.98235294, specificity = 0.6615942. This was also the best model with respect to accuracy. 
+
+
+```{r Boosted Classification Trees}
+# setting up tuning grid
+boosted_class_tg <- expand.grid(n.trees = c(200, 400, 600, 800),
+                               interaction.depth = 1:6,
+                               shrinkage = c(0.0001, 0.001, 0.01, 0.1, 0.5),
+                               n.minobsinnode = c(5,10,15))
+
+set.seed(1234)
+# 10-fold CV boosted classification tree using train()
+boosted_class_train <- train(x = SML_x, y = SML_y, method = "gbm", 
+                         bag.fraction = 0.50, tuneGrid = boosted_class_tg,
+                         trControl = trainControl(method = "cv", number = 10,
+                                                  classProbs = TRUE,
+                                                  selectionFunction = "best",
+                                                  savePredictions = TRUE))
+
+boosted_class_train$results[which.max(boosted_class_train$results$Accuracy),]
+
+summary(boosted_class_train$finalModel, method = relative.influence, 
+        normalize = TRUE, las = 2)
+
+# finds which threshold results in the best model
+(boosted_class_train_thresh <- thresholder(boosted_class_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- boosted_class_train_thresh$Sensitivity[i] + 
+    boosted_class_train_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(boosted_class_train_thresh$Accuracy)
+boosted_class_train_thresh
+
+plot(boosted_class_train$finalModel, i = "tumor2",
+     ylab = "logodds(STATUS = ALIVE)",
+     main = "Partial Dependence Plot for tumor in upper extremities")
+plot(boosted_class_train$finalModel, i = "tumor1",
+     ylab = "logodds(STATUS = ALIVE)",
+     main = "Partial Dependence Plot for tumor in lower extremities")
+plot(boosted_class_train$finalModel, i = "IDO1PosCD20PosBcells",
+     ylab = "logodds(STATUS = ALIVE)",
+     main = "Partial Dependence Plot for intensity of IDO1+ CD20+ Bcells")
+
+
+
+```
+
+
++ Using the 10-fold CV for boosted classification tree model, the optimal tuning parameter combination has $400$ trees, an interaction depth of $2$, and a shrinkage parameter of $0.0.1$. The minimum number of observations in each terminal node was 15 and had a threshold of 0.5. The corresponding 10-fold CV accuracy is $0.8002189$, Cohen's $\kappa = 0.61135458$, sensitivity = 0.92794118, specificity = 0.7088768. 
+
++ Using 10-fold CV for a boosted classification tree model with optimal tuning parameters as stated above, the threshold levels that performed best with respect to the sum of sensitivity and specificity were 0.2 and 0.3, accuracy = 0.7950876, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942. The best model with respect to accuracy has a threshold of 0.5. 
+
++ From on the variable importance plot based on relative influence, we can see that three most important predictors, relative to all other variables in the data set, are whether or not they have a metastatic tumor in their upper extremities (tumor2), whether or not they have a metastatic tumor in their lower extremities (tumor1), and the intensity of their Cytotoxic T cells.  
+
++ The graphs for tumor2 and tumor1 appear to be binary, which is what we'd expect since those variables are binary
+  
+  
+
+```{r Support Vector Machines Kernels} 
+# LINEAR KERNEL
+# set up tuning grid
+linear_tg <- expand.grid(C = c(0.001, 0.01, 0.1, 1, 10))
+set.seed(1234)
+svm_linear_train <- train(x = SML_x, y = SML_y,
+                      method = "svmLinear", tuneGrid = linear_tg,
+                      trControl = trainControl(method = "cv", number = 10,
+                                               classProbs = TRUE,
+                                               selectionFunction = "best",
+                                               savePredictions = TRUE))
+svm_linear_train$results[which.max(svm_linear_train$results$Accuracy),]
+
+# finds which threshold results in the best model
+(svm_linear_train_thresh <- thresholder(svm_linear_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- svm_linear_train_thresh$Sensitivity[i] + 
+    svm_linear_train_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(svm_linear_train_thresh$Accuracy)
+#boosted_class_train_thresh
+
+
+
+# POLYNOMIAL KERNEL
+poly_tg <- expand.grid(degree = 1:5, scale = 1:5, 
+                       C = c(0.001, 0.01, 0.1, 1, 10))
+set.seed(1234)
+svm_poly_train <- train(x = SML_x, y = SML_y,
+                      method = "svmPoly", tuneGrid = poly_tg,
+                      trControl = trainControl(method = "cv", number = 10,
+                                               classProbs = TRUE,
+                                               selectionFunction = "best",
+                                               savePredictions = TRUE))
+svm_poly_train$results[which.max(svm_poly_train$results$Accuracy),]
+
+# finds which threshold results in the best model
+(svm_poly_train_thresh <- thresholder(svm_poly_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- svm_poly_train_thresh$Sensitivity[i] + 
+    svm_poly_train_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(svm_poly_train_thresh$Accuracy)
+
+# radial basis KERNEL
+radial_tg <- expand.grid(C = c(0.001, 0.01, 0.1, 1, 10),
+                         sigma = seq(0.001, 0.10, by = 0.005))
+set.seed(1234)
+svm_radial_train <- train(x = SML_x, y = SML_y,
+                      method = "svmRadial", tuneGrid = radial_tg,
+                      trControl = trainControl(method = "cv", number = 10,
+                                               classProbs = TRUE,
+                                               selectionFunction = "best",
+                                               savePredictions = TRUE))
+svm_radial_train$results[which.max(svm_radial_train$results$Accuracy),]
+
+# finds which threshold results in the best model
+(svm_radial_train_thresh <- thresholder(svm_radial_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- svm_radial_train_thresh$Sensitivity[i] + 
+    svm_radial_train_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(svm_radial_train_thresh$Accuracy)
+```
+
++ Using the 10-fold CV for a support vector machine with a linear kernel, the optimal tuning parameter, cost of constraint, is $0.01$ with a threshold of 0.5. The corresponding 10-fold CV accuracy is $0.7950876$, Cohen's $\kappa = 0.60723$, sensitivity = 0.98235294, specificity = 0.6615942 
+
++ Using 10-fold CV for a support vector machine with a linear kernel with optimal tuning parameters as stated above, the threshold levels that performed best with respect to the sum of sensitivity and specificity were 0.2 through 0.6 accuracy = 0.7950876, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942. These were also the best models with respect to accuracy. 
+
++ Using the 10-fold CV for a support vector machine with a polynomial kernel, the optimal tuning parameter combination has a cost of constraint of $0.01$, degree of 1, scale of 1, offset of 0 with a threshold of 0.5. The corresponding 10-fold CV accuracy is $0.7950876$, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942 
+
++ Using 10-fold CV for a support vector machine with a polynomial kernel with optimal tuning parameters as stated above, the threshold levels that performed best with respect to the sum of sensitivity and specificity were 0.2 through 0.6 accuracy = 0.7950876, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942. These were also the best models with respect to accuracy. 
+
++ Using the 10-fold CV for a support vector machine with a radial basis kernel, the optimal tuning parameter combination has a cost of constraint of $1$, and inverse kernel width of $0.005$ with a threshold of 0.5. The corresponding 10-fold CV accuracy is $0.7849562$, Cohen's $\kappa = 0.5861019$, sensitivity = 0.98235294, specificity = 0.6615942 
+
++ Using 10-fold CV for a support vector machine with a radial basis kernel with optimal tuning parameters as stated above, the threshold levels that performed best with respect to the sum of sensitivity and specificity were 0.3 and 0.4 accuracy = 0.7950876, Cohen's $\kappa = 0.60723002$, sensitivity = 0.98235294, specificity = 0.6615942. These were also the best models with respect to accuracy. 
+
++ However, for the models with radial basis kernels, there were many "maximum number of iterations reached," so that data should probably be taken with a grain of salt. 
+
+```{r Neural Networks}
+nnet_class_tg <- expand.grid(size = seq(5, 20, 1), 
+                             decay = c(0, 0.000001, 0.00001, 0.0001,
+                                       0.001, 0.01, 0.1, 1))
+
+set.seed(1234)
+nnet_class_train <- train(x = SML_x, y = SML_y, 
+                        method = "nnet", tuneGrid = nnet_class_tg,
+                        trControl = trainControl(method = "cv", number = 10,
+                                               classProbs = TRUE,
+                                               selectionFunction = "best",
+                                               savePredictions = TRUE))
+nnet_class_train$results[which.max(nnet_class_train$results$Accuracy),]
+
+# finds which threshold results in the best model
+(nnet_class_train_thresh <- thresholder(nnet_class_train, 
+                               threshold = prob_thresh,
+                               final = TRUE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa")))
+
+best_glm <- numeric(9)
+for (i in 1:9){
+  best_glm[i] <- nnet_class_train_thresh$Sensitivity[i] + 
+    nnet_class_train_thresh$Specificity[i]
+}
+# finds the best model wrt to a combination of sensitivity and specificity
+max(best_glm)
+(best_glm)
+# finds best model wrt to accuracy
+max(nnet_class_train_thresh$Accuracy)
+```
+
++ Using the 10-fold CV for a neural network model, the optimal tuning parameter combination has a size of $15$ and decay value of $0.01$ with a threshold of 0.5. The corresponding 10-fold CV accuracy is $0.7278737$, Cohen's $\kappa = 0.4434585$, sensitivity = 0.6816176, specificity = 0.7597826. 
+
++ Using 10-fold CV for a neural network model with optimal tuning parameters as stated above, the threshold level that performed best with respect to the sum of sensitivity and specificity was 0.1. accuracy = 0.7253158, Cohen's $\kappa = 0.4620328$, sensitivity = 0.8312500, specificity = 0.6487319. The best model with respect to accuracy had a threshold of 0.5. 
+
+```{r Summary Data}
+# the accuracy, kappa, Sens + Spec for the various models at the "best" thresholds
+models <- c("Logistic Regression: Sens + Spec", 
+            "Logistic Regression: Accuracy", 
+            "Logistic Regression with Ridge Penalty: Sens + Spec and Accuracy",
+            "Logistic Regression with LASSO Penalty: Sens + Spec",
+            "Logistic Regression with LASSO Penalty: Accuracy",
+            "Decision Classification Tree: Sens + Spec",
+            "Decision Classification Tree: Accuracy",
+            "Bagging with Classification Trees: Sens + Spec",
+            "Bagging with Classification Trees: Accuracy",
+            "Random Forests with Classification Trees: Sens + Spec",
+            "Random Forests with Classification Trees: Accuracy",
+            "Boosted Random Forests with Classification Trees: Sens + Spec",
+            "Boosted Random Forests with Classification Trees: Accuracy",
+            "SVM Linear Kernel: Sens + Spec and Accuracy",
+            "SVM Polynomial Kernel: Sens + Spec",
+            "SVM Polynomial Kernel: Accuracy",
+            "SVM Radial Basis Kernel: Sens + Spec",
+            "SVM Radial Basis Kernel: Accuracy",
+            "Neural Network: Sens + Spec and Accuracy"
+            )
+
+lmReg_SSvec <- lmReg_thresh[1,2:6]
+lmReg_Avec <- lmReg_thresh[3,2:6]
+lmReg_ridge_SSAvec <- lmReg_ridge_thresh[3,3:7]
+lmReg_LASSO_SSvec <- lmReg_lasso_thresh[4,3:7]
+lmReg_LASSO_Avec <- lmReg_lasso_thresh[5,3:7]
+class_tree_SSvec <- class_tree_thresh[2,2:6]
+class_tree_Avec <- class_tree_thresh[4,2:6]
+bagging_forest_SSvec <- bagging_forest_thresh[3,2:6]
+bagging_forest_Avec <- bagging_forest_thresh[5,2:6]
+rforest_SSvec <- rforest_thresh[2,2:6]
+rforest_Avec <- rforest_thresh[5,2:6]
+boosted_tree_SSvec <- boosted_class_train_thresh[1,5:9]
+boosted_tree_Avec <- boosted_class_train_thresh[5,5:9]
+svm_linear_SSAvec <- svm_linear_train_thresh[4,2:6]
+svm_poly_SSvec <- svm_poly_train_thresh[3,4:8]
+svm_poly_Avec <- svm_poly_train_thresh[4,4:8]
+svm_radial_SSvec <- svm_radial_train_thresh[3,3:7]
+svm_radial_Avec <- svm_radial_train_thresh[5,3:7]
+nn_SSAvec <- nnet_class_train_thresh[5,3:7]
+
+model_DF <- rbind(lmReg_SSvec, lmReg_Avec, lmReg_ridge_SSAvec, lmReg_LASSO_SSvec,
+                  lmReg_LASSO_SSvec, class_tree_SSvec, class_tree_Avec, 
+                  bagging_forest_SSvec, bagging_forest_Avec, rforest_SSvec,
+                  rforest_Avec, boosted_tree_SSvec, boosted_tree_Avec, 
+                  svm_linear_SSAvec, svm_poly_SSvec, svm_poly_Avec, 
+                  svm_radial_SSvec, svm_radial_Avec, nn_SSAvec)
+rownames(model_DF) <- models
+write.csv(model_DF, "models.csv", row.names = TRUE)
+```
+
