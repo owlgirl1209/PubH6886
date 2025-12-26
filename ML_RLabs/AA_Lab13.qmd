@@ -1,0 +1,135 @@
+---
+title: "PubH 6884 R Lab 13"
+author: Annie Allred
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+```{r}
+#| echo: FALSE
+library(nnet)
+library(NeuralNetTools)
+library(caret)
+```
+
+# *Neural Network Regression Example*
+
+```{r Neural Network Regression}
+# simulate new large data set
+set.seed(12345)
+X1 <- rnorm(n = 10000, mean = 0, sd = 1)
+X2 <- rnorm(n = 10000, mean = 0, sd = 1)
+X3 <- rnorm(n = 10000, mean = 0, sd = 1)
+X4 <- rbinom(n = 10000, size = 1, prob = 0.5)
+Y <- 1 + sin(X1) + -0.7*exp(X2/8) + X1*X3/5 + X4*X2 + rnorm(n = 10000, 
+                                                            mean = 0, sd = 1)
+sim_reg_data <- data.frame(X1, X2, X3, X4, Y)
+sim_reg_data_train <- sim_reg_data[1:7000,]
+sim_reg_data_test <- sim_reg_data[7001:10000,]
+head(sim_reg_data_train)
+
+set.seed(1234)
+nn_reg <- nnet(Y ~ X1 + X2+X3+X4, linout = TRUE, size = 5, 
+               decay = 0, data = sim_reg_data_train)
+nn_reg
+
+plotnet(nn_reg)
+
+# set up tuning gride
+tg_reg <- expand.grid(size = 2:10, decay = 0)
+# conduct 10-fold CV to select the number of nodes
+set.seed(1234)
+nn_reg_train <- train(x = sim_reg_data_train[,1:4], y = sim_reg_data_train$Y,
+                      method = "nnet", tuneGrid = tg_reg, 
+                      trControl = trainControl(method = "cv", number = 10)) 
+nn_reg_train
+plotnet(nn_reg_train$finalModel)
+
+# obtain RMSE and R^2 
+nn_reg_preds <- predict(nn_reg_train$finalModel, 
+                        newdata = sim_reg_data_test[,1:4])
+# RMSE
+sqrt(mean((sim_reg_data_test$Y - nn_reg_preds)^2))
+# R^2
+cor(sim_reg_data_test$Y, nn_reg_preds)^2
+```
+
+# *Neural Network Classification Example*
+
+```{r Neural Network Classification}
+make_circle <- function(n_samples = 100, shuffle = TRUE, noise = TRUE, factor = 0.8) {
+# function to generate data for classification
+linespace <- seq(0, 2*pi, 2*pi/floor(n_samples/2))
+linespace <- linespace[(1:length(linespace) - 1)]
+outer_circ_x <- cos(linespace)
+outer_circ_y <- sin(linespace)
+inner_circ_x <- outer_circ_x*factor
+inner_circ_y <- outer_circ_y*factor
+X <- cbind(c(outer_circ_x, inner_circ_x), c(outer_circ_y, inner_circ_y))
+Y <- c(rep(0, floor(n_samples/2)), rep(1, floor(n_samples/2)))
+if(noise == TRUE) {
+X <- X + matrix(rnorm(floor(n_samples/2)*4, 0, factor), nrow = floor(n_samples/2)*2)
+}
+df <- as.data.frame(cbind(X, Y))
+colnames(df) <- c("X1", "X2", "Y")
+if(shuffle == TRUE) {
+df <- df[sample.int(nrow(df)),]
+rownames(df) <- 1:(floor(n_samples/2)*2)
+}
+return(df)
+}
+set.seed(70)
+sim_class_data <- make_circle(n_samples = 10000, shuffle = TRUE, noise = TRUE, factor = 0.4)
+sim_class_data_train <- sim_class_data[1:1000,]
+sim_class_data_test <- sim_class_data[1001:10000,]
+
+plot(sim_class_data_train[,1:2], col = ifelse(sim_class_data_train$Y == 0, "blue", "red"),
+     pch = ifelse(sim_class_data_train$Y == 0, 19, 17))
+
+set.seed(1234)
+nn_class <- nnet(Y ~ X1 + X2, linout = FALSE, size = 5, decay = 0, 
+                 data = sim_class_data_train)
+nn_class
+plotnet(nn_class)
+
+# set up tuning grid
+tg_class <- expand.grid(size = 2:10, decay = 0)
+# first convert Y to a factor with appropriately named levels
+Yfac <- factor(ifelse(sim_class_data_train$Y == 0, "blue", "red"))
+
+set.seed(1234)
+nn_class_train <- train(x = sim_class_data_train[,1:2], y = Yfac,
+                        method = "nnet", tuneGrid = tg_class,
+                        trControl = trainControl(method = "cv", number = 10,
+                                                 classProbs = TRUE))
+nn_class_train
+plotnet(nn_class_train$finalModel)
+
+# compute probability of "red"
+nn_class_pred_prob <- predict(nn_class_train$finalModel, 
+                              newdata = sim_class_data_test[,1:2])
+nn_class_pred <- ifelse(nn_class_pred_prob > 0.50, "red", "blue")
+# convert Y from test data to a factor variable with apprpriatley named levels
+Yfac_test <- factor(ifelse(sim_class_data_test$Y == 0, "blue", "red"))
+# look at confusion matrix
+table(pred = nn_class_pred, obs = Yfac_test)
+# compute accuracy 
+sum(Yfac_test == nn_class_pred)/9000
+
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,152 @@
+---
+title: "PubH 6884 R Lab 11"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+```{r}
+#| output: FALSE
+library(rpart)
+library(tidyverse)
+library(rpart.plot)
+library(caret)
+library(randomForest)
+library(gbm)
+```
+
+# *Boosted Regression Tree Example* 
+
+```{r Boosted Regression Tree Example}
+# loading the data set
+prostate_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/prostate_data.csv")
+# training data set
+prostate_data_train <- prostate_data[prostate_data$train, ]
+# testing data set
+prostate_data_test <- prostate_data[!prostate_data$train, ]
+
+# fit boosted regression tree
+set.seed(1234)
+gbm_reg <- gbm(lpsa ~ lcavol + lweight + age + lbph + svi + lcp + gleason + pgg45,
+               distribution = "gaussian", n.trees = 500, interaction.depth = 1,
+               shrinkage = 0.01, n.minobsinnode = 10, bag.fraction = 0.50, 
+               cv.folds = 10, data = prostate_data_train)
+gbm_reg
+# train RMSE
+sqrt(gbm_reg$cv.error[392])
+
+# use to predict() to obtain predicted values
+gbm_reg_pred <- predict(gbm_reg, newdata = prostate_data_test, n.trees = 392)
+gbm_reg_pred
+# test RMSE
+sqrt(mean((prostate_data_test$lpsa - gbm_reg_pred)^2))
+
+# relative influence approach
+summary(gbm_reg, method = relative.influence, normalize = TRUE, las = 2)
+# permutation approach
+summary(gbm_reg, method = permutation.test.gbm, normalize = TRUE, las = 2)
+
+# Construct partial dependence plots for top 6 most influential predictors
+plot(gbm_reg, i = "lcavol", ylim = c(-0.40, 5.5))
+plot(gbm_reg, i = "lweight", ylim = c(-0.40, 5.5))
+plot(gbm_reg, i = "pgg45", ylim = c(-0.40, 5.5))
+plot(gbm_reg, i = "gleason", ylim = c(-0.40, 5.5))
+plot(gbm_reg, i = "lbph", ylim = c(-0.40, 5.5))
+plot(gbm_reg, i = "lcp", ylim = c(-0.40, 5.5))
+
+
+### will now use train() to fit
+# set up tuning grid
+tg_boostreg <- expand.grid(n.trees = c(200, 400, 600, 800),
+                           interaction.depth = c(1:5),
+                           shrinkage = c(0.0001, 0.001, 0.01, 0.1),
+                           n.minobsinnode = 10)
+set.seed(1234)
+train_boostreg <- train(x = prostate_data_train[,1:8], 
+                        y = prostate_data_train$lpsa,
+                        method = "gbm", bag.fraction = 0.50, 
+                        tuneGrid = tg_boostreg,
+                        trControl = trainControl(method = "cv", number = 10))
+# best model wrt MSE (?)
+train_boostreg$bestTune
+train_boostreg$results[which.min(train_boostreg$results$RMSE),]
+
+# relative influence approach
+summary(train_boostreg$finalModel, method = relative.influence, 
+        normalize = TRUE, las = 2)
+# permutation approach
+summary(train_boostreg$finalModel, method = permutation.test.gbm, 
+        normalize = TRUE, las = 2)
+
+# Construct partial dependence plots for top 6 most influential predictors
+plot(train_boostreg$finalModel, i = "lcavol", ylim = c(-0.40, 5.5))
+plot(train_boostreg$finalModel, i = "lweight", ylim = c(-0.40, 5.5))
+plot(train_boostreg$finalModel, i = "pgg45", ylim = c(-0.40, 5.5))
+plot(train_boostreg$finalModel, i = "gleason", ylim = c(-0.40, 5.5))
+plot(train_boostreg$finalModel, i = "lbph", ylim = c(-0.40, 5.5))
+plot(train_boostreg$finalModel, i = "lcp", ylim = c(-0.40, 5.5))
+```
+
+# *Boosted Classification Tree Example* 
+
+```{r Boosted Classification Tree Example}
+# data set for heart disease prediction models
+heart_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/Heart.csv")
+# convert ChestPain and Thal to factor variables
+heart_data$ChestPain <- factor(heart_data$ChestPain)
+heart_data$Thal <- factor(heart_data$Thal)
+# split into training and test sets
+set.seed(1234)
+heart_train_row <- sort(sample(1:303, size = 202))
+heart_test_row <- setdiff(1:303, heart_train_row)
+heart_data_train <- heart_data[heart_train_row,]
+heart_data_test <- heart_data[heart_test_row,]
+
+# remove subject with missing data
+heart_data_train <- heart_data_train[complete.cases(heart_data_train),]
+heart_data_test <- heart_data_test[complete.cases(heart_data_test),]
+# create preictor matrix and response vector
+heart_data_train_X <- heart_data_train[,1:13]
+heart_data_train_Y <- factor(heart_data_train$AHD)
+# set up tuning grid
+tg_boostclass <- expand.grid(n.trees = c(200, 400, 600, 800),
+                           interaction.depth = c(1:5),
+                           shrinkage = c(0.0001, 0.001, 0.01, 0.1),
+                           n.minobsinnode = 10)
+set.seed(1234)
+train_boostclass <- train(x = heart_data_train_X, y = heart_data_train_Y,
+                          method = "gbm", bag.fraction = 0.50, 
+                          tuneGrid = tg_boostclass, 
+                          trControl = trainControl(method = "cv", number = 10))
+train_boostclass$bestTune
+train_boostclass$results[which.max(train_boostclass$results$Accuracy),]
+
+# relative influence approach
+summary(train_boostclass$finalModel, method = relative.influence, 
+        normalize = TRUE, las = 2)
+# permutation approach
+summary(train_boostclass$finalModel, method = permutation.test.gbm, 
+        normalize = TRUE, las = 2)
+
+# Construct partial dependence plots for top 6 most influential predictors
+plot(train_boostclass$finalModel, i = "Thal", ylim = c(-1,1))
+plot(train_boostclass$finalModel, i = "Ca", ylim = c(-1,1))
+plot(train_boostclass$finalModel, i = "ChestPain", ylim = c(-1,1))
+plot(train_boostclass$finalModel, i = "Oldpeak", ylim = c(-1,1))
+plot(train_boostclass$finalModel, i = "MaxHR", ylim = c(-1,1))
+plot(train_boostclass$finalModel, i = "Age", ylim = c(-1,1))
+
+```
+
+
+

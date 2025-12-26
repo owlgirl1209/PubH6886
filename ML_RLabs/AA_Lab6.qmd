@@ -1,0 +1,197 @@
+---
+title: "PubH 6886 R Lab 6"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+```{r}
+##| echo: false
+library(tidyverse)
+library(caret)
+```
+
+# *5.3.1 The Validation Set Approach*
+
+```{r}
+library(ISLR2)
+set.seed(1)
+train <- sample(392, 196)
+
+lm.fit <- lm(mpg ~ horsepower, data = Auto, subset = train)
+
+attach(Auto)
+mean((mpg - predict(lm.fit, Auto))[-train]^2)
+
+lm.fit2 <- lm(mpg ~ poly(horsepower, 2), data = Auto, subset = train)
+mean((mpg - predict(lm.fit2, Auto))[-train]^2)
+lm.fit3 <- lm(mpg ~ poly(horsepower, 3), data = Auto, subset = train)
+mean((mpg - predict(lm.fit3, Auto))[-train]^2)
+
+set.seed(2)
+train <- sample(392, 196)
+lm.fit <- lm(mpg ~ horsepower, data = Auto, subset = train)
+mean((mpg - predict(lm.fit, Auto))[-train]^2)
+lm.fit2 <- lm(mpg ~ poly(horsepower, 2), data = Auto, subset = train)
+mean((mpg - predict(lm.fit2, Auto))[-train]^2)
+lm.fit3 <- lm(mpg ~ poly(horsepower, 3), data = Auto, subset = train)
+mean((mpg - predict(lm.fit3, Auto))[-train]^2)
+```
+
+# *5.3.2 Leave-One-Out Cross-Validation*
+
+```{r}
+glm.fit <- glm(mpg ~ horsepower, data = Auto)
+coef(glm.fit)
+
+lm.fit <- lm(mpg ~ horsepower, data = Auto)
+coef(lm.fit)
+
+library(boot)
+glm.fit <- glm(mpg ~ horsepower, data = Auto)
+cv.err <- cv.glm(Auto, glm.fit)
+cv.err$delta
+
+cv.error <- rep(0, 10)
+for (i in 1:10){
+  glm.fit <- glm(mpg ~ poly(horsepower, i), data = Auto)
+  cv.error[i] <- cv.glm(Auto, glm.fit)$delta[1]
+}
+cv.error
+```
+
+# *5.3.3 k-Fold Cross-Validation*
+
+```{r}
+set.seed(17)
+cv.error.10 <- rep(0, 10)
+for (i in 1:10){
+  glm.fit <- glm(mpg ~ poly(horsepower, i), data = Auto)
+  cv.error.10[i] <- cv.glm(Auto, glm.fit, K = 10)$delta[1]
+}
+cv.error.10
+```
+
+# *In-Class Code*
+
+Run and submit all the code shown on slides 25 - 39
+
+```{r}
+# data set for psa prediction models
+prostate_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/prostate_data.csv")
+# dimension of the data set
+dim(prostate_data)
+# look at the first few rows of prostate_data
+head(prostate_data)
+
+library(caret)
+lm_lpsa_loocv <- train(x = prostate_data[,1:8], y = prostate_data$lpsa,
+                       method = "lm", 
+                       trControl = trainControl(method = "LOOCV"))
+lm_lpsa_loocv
+
+# pick off RMSE and square to get estimate of test MSE
+lm_lpsa_loocv$results$RMSE^2
+# can pick off information about model fitted to entire data set
+#   the object below is an lm object (fitted to all 97 observations)
+lm_lpsa_loocv$finalModel
+
+# set up the tuneGrid object
+tg_01 <- data.frame(k = 1:20)
+# obtain LOOCV measures for each model
+knn20_lpsa_loocv <- train(x = prostate_data[, 1:8], y = prostate_data$lpsa,
+                          method = "knn", 
+                          trControl = trainControl(method = "LOOCV"),
+                          tuneGrid = tg_01)
+knn20_lpsa_loocv
+knn20_lpsa_loocv$results %>%
+  ggplot(aes(x = k, y = RMSE)) +
+  geom_point(col = "salmon") + 
+  geom_line(col = "salmon") + 
+  theme_bw()
+
+knn20_lpsa_loocv$finalModel
+
+# set seed (for reproducibility) and obtain 10-fold CV error for the linear model
+set.seed(12345)
+lm_lpsa_10cv <- train(x = prostate_data[,1:8], y = prostate_data$lpsa,
+                      method = "lm", trControl = trainControl(method = "cv",
+                                                              number = 10))
+lm_lpsa_10cv
+
+# set seed (for reproducibility) and obtain 10-fold CV error for the linear model
+set.seed(12345)
+knn20_lpsa_10cv <- train(x = prostate_data[, 1:8], y = prostate_data$lpsa,
+                          method = "knn", 
+                          trControl = trainControl(method = "cv", number = 10),
+                          tuneGrid = tg_01)
+knn20_lpsa_10cv
+knn20_lpsa_10cv$results %>%
+  ggplot(aes(x = k, y = RMSE)) +
+  geom_point(col = "salmon") + 
+  geom_line(col = "salmon") + 
+  theme_bw()
+
+
+# data set for heart disease prediction models
+heart_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/Heart.csv")
+# convert Sex, ChestPain, Fbs, RestECG, ExAng, Slope, and Thal to factor variables
+heart_data$Sex <- factor(heart_data$Sex)
+heart_data$ChestPain <- factor(heart_data$ChestPain)
+heart_data$Fbs <- factor(heart_data$Fbs)
+heart_data$RestECG <- factor(heart_data$RestECG)
+heart_data$ExAng <- factor(heart_data$ExAng)
+heart_data$Slope <- factor(heart_data$Slope)
+heart_data$Thal <- factor(heart_data$Thal)
+# look at first few rows of heart_data
+head(heart_data)
+# look at distribution of response
+table(heart_data$AHD)
+
+set.seed(1234)
+lr_heart_10cv_1 <- train(x = heart_data[, 1:13], y = heart_data$AHD,
+                         method = "glm", family = binomial(link = "logit"),
+                         trControl = trainControl(method = "cv", number = 10,
+                                                  classProbs = TRUE, 
+                                                  savePredictions = TRUE))
+lr_heart_10cv_1
+
+set.seed(1234)
+lr_heart_10cv_2 <- train(x = heart_data[, 1:13], y = heart_data$AHD,
+                         method = "glm", family = binomial(link = "logit"),
+                         trControl = trainControl(method = "cv", number = 10,
+                                                  summaryFunction = twoClassSummary,
+                                                  classProbs = TRUE, 
+                                                  savePredictions = TRUE))
+lr_heart_10cv_2
+
+# first, provide a sequence of threshold values
+prob_thresh <- seq(0.1, 0.9, by = 0.1)
+prob_thresh
+# use thresholder() function to obtain accuracy measures at each threshold
+lr_heart_ths <- thresholder(lr_heart_10cv_2, 
+                            threshold = prob_thresh,
+                            final = TRUE,
+                            statistics = c("Sensitivity", "Specificity", 
+                                           "Accuracy", "Kappa"))
+lr_heart_ths
+```
+
+
+
+
+
+
+
+
+

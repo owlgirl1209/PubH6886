@@ -1,0 +1,168 @@
+---
+title: "PubH 6886 R Lab 12"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+```{r}
+#| output: FALSE
+library(rpart)
+library(tidyverse)
+library(rpart.plot)
+library(caret)
+library(randomForest)
+library(kernlab)
+```
+
+# *SVM Binary Classification Example*
+
+```{r SVM Binary Classification}
+# data set for heart disease prediction models
+heart_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/Heart.csv")
+# convert ChestPain and Thal to factor variables
+heart_data$ChestPain <- factor(heart_data$ChestPain)
+heart_data$Thal <- factor(heart_data$Thal)
+heart_data$AHD <- factor(heart_data$AHD)
+
+# split into training and test sets
+set.seed(1234)
+heart_train_row <- sort(sample(1:303, size = 202))
+heart_test_row <- setdiff(1:303, heart_train_row)
+heart_data_train <- heart_data[heart_train_row,]
+heart_data_test <- heart_data[heart_test_row,]
+
+# remove subject with missing data
+heart_data_train <- heart_data_train[complete.cases(heart_data_train),]
+heart_data_test <- heart_data_test[complete.cases(heart_data_test),]
+
+# LINEAR KERNEL
+set.seed(1234)
+svm_lin_C10 <- ksvm(AHD ~., data = heart_data_train,
+                    kernel = "vanilladot", C = 10, scale = FALSE, cross = 10)
+svm_lin_C10
+# first 5 indices for support vectors
+svm_lin_C10@SVindex[1:5]
+
+set.seed(1234)
+svm_lin_C0.1 <- ksvm(AHD ~., data = heart_data_train,
+                    kernel = "vanilladot", C = 0.10, scale = FALSE, cross = 10)
+svm_lin_C0.1
+# first 5 indices for support vectors
+svm_lin_C0.1@SVindex[1:5]
+
+# POLYNOMIAL KERNEL
+set.seed(1234)
+svm_poly_C10 <- ksvm(AHD ~ ., data = heart_data_train,
+                    kernel = "polydot", 
+                    kpar = list(degree = 2, scale = 1, offset = 1),
+                    C = 10, scale = FALSE, cross = 10)
+svm_poly_C10
+# first 5 indices for support vectors
+svm_poly_C10@SVindex[1:5]
+
+set.seed(1234)
+svm_poly_C0.1 <- ksvm(AHD ~., data = heart_data_train,
+                    kernel = "polydot", 
+                    kpar = list(degree = 2, scale = 1, offset = 1),
+                    C = 0.10, scale = FALSE, cross = 10)
+svm_poly_C0.1
+# first 5 indices for support vectors
+svm_poly_C0.1@SVindex[1:5]
+
+# RADIAL BASIS KERNEL
+set.seed(1234)
+svm_rbf_C10 <- ksvm(AHD ~ ., data = heart_data_train,
+                    kernel = "rbfdot", 
+                    kpar = list(sigma = 1),
+                    C = 10, scale = FALSE, cross = 10)
+svm_rbf_C10
+# first 5 indices for support vectors
+svm_rbf_C10@SVindex[1:5]
+
+set.seed(1234)
+svm_rbf_C0.1 <- ksvm(AHD ~., data = heart_data_train,
+                    kernel = "rbfdot", 
+                    kpar = list(sigma = 1),
+                    C = 0.10, scale = FALSE, cross = 10)
+svm_rbf_C0.1
+# first 5 indices for support vectors
+svm_rbf_C0.1@SVindex[1:5]
+
+# TRAIN() FUNCTION FOR  RADIAL BASIS KERNEL
+
+# create predictor matrix and response vector
+# since the predictors are a miz of numerical and categorical variables,
+# it is simplest to set up a model matrix that converts categorical variables
+# to sets of dummy variables
+
+f1 <- formula(AHD ~ Age + Sex + ChestPain + RestBP + Chol + Fbs + RestECG 
+              + MaxHR +ExAng + Oldpeak + Slope + Ca + Thal)
+mf <- model.frame(f1, data = heart_data_train)
+heart_data_train_X <- model.matrix(mf, data = heart_data_train)[,-1] # remove intercpt column
+heart_data_train_Y <- heart_data_train$AHD
+
+# set up tuning grid
+tg_svmrbk <- expand.grid(C = c(0.001, 0.01, 0.1, 1, 10),
+                         sigma = seq(0.005, 0.10, by = 0.005))
+set.seed(1234)
+train_svmrbk <- train(x = heart_data_train_X, y = heart_data_train_Y,
+                      method = "svmRadial", tuneGrid = tg_svmrbk,
+                      trControl = trainControl(method = "cv", number = 10))
+train_svmrbk$results[which.max(train_svmrbk$results$Accuracy),]
+
+# have to create dummy variables for categorical variables in test set
+mftest <- model.frame(f1, data = heart_data_test)
+heart_data_test_X <- model.matrix(mftest, data = heart_data_test)[,-1] # remove intercpt column
+
+# obtain predicted classes
+pred_test <- predict(train_svmrbk$finalModel, newdata = heart_data_test_X)
+
+# construct confusion matrix
+table(obs = heart_data_test$AHD, pred = pred_test) # accuracy - 80/99 = 0.81
+```
+
+# *SVM Multiple Class Example*
+
+```{r SVM Multiple Class}
+library(ISLR2)
+str(Khan)
+
+# look at frquencies for outcome classes in training set
+table(Khan$ytrain)
+
+# set up training data 
+xtrain <- Khan$xtrain
+xtest <- Khan$xtest
+colnames(xtrain) <- paste0("x", 1:2308)
+colnames(xtest) <- paste0("x", 1:2308)
+ytrain_fac <- factor(Khan$ytrain)
+ytest_fac <- factor(Khan$ytest)
+
+# set up tuning grid
+tg_svmlin <- expand.grid(C = c(0.001, 0.01, 0.1, 1, 10, 100))
+
+set.seed(1234)
+train_svmlin <- train(x = xtrain, y = ytrain_fac,
+                      method = "svmLinear", tuneGrid = tg_svmlin,
+                      trControl = trainControl(method = "cv", number = 10))
+train_svmlin
+
+# confusion matrix for training data
+table(pred = predict(train_svmlin$finalModel), obs = ytrain_fac)
+# confusion matrix for test data
+table(pred = predict(train_svmlin$finalModel, newdata = xtest), obs = ytest_fac)
+
+
+
+```
+

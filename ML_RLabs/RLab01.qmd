@@ -1,0 +1,145 @@
+---
+title: "R Lab 1"
+author: "Annie Allred"
+# title-block-banner: true
+# title-block-banner-color: light blue
+# format: 
+#   html:
+#     mainfont: Times New Roman
+#     fontsize: 15px
+#     embed-resources: true
+# editor: source
+format: pdf
+---
+
+```{r}
+#| echo: false
+#| output: false
+library(tidyverse)
+```
+
+# 1 Vectors and Matrices
+
+```{r}
+# this creates vector a as a 4 x 1 column vector
+a <- c(1, 2, 3, 4)
+a
+
+#This creates A as a 2 x 3 matrix
+A <- matrix(c(1, 2, 3, 4, 5, 6), byrow = TRUE, nrow = 2)
+A
+
+# this creates a_t, the 1 x 4 vector transpose of a
+a_t <- t(a)
+a_t
+
+# This creates A_t, the 3 x 2 matrix transpose of A
+A_t <- t(A)
+A_t
+
+dim(A)
+```
+
+# 2 Matrix Addition and Scalar Multiplication
+
+```{r}
+# create matrices U and V
+U <- matrix(c(2, -2, 1, 4, 8, -1, -1, 2, 6), 
+            byrow = TRUE, nrow = 3)
+V <- matrix(c(3, 1, -1, -1, 2, 9, -8, 3, 3), 
+            byrow=TRUE, nrow=3)
+# Add U + V
+U + V
+
+3*U
+```
+# 3 Matrix Multiplication
+
+```{r}
+# create matrices G and H
+G <- matrix(c(1, -2, 0, -1, 3, 2),
+            byrow=TRUE, nrow=2)
+H <- matrix(c(3, 1, -1, -1, 2, 7, -4, 3, 1), 
+            byrow = TRUE, nrow = 3)
+G%*%H
+# H%*%G
+```
+# 4 Determinant of a Matrix
+
+```{r}
+det(V)
+```
+
+# 5 Inverse of a Matrix
+
+```{r}
+# create K
+K <- matrix(c(-1, 3, 2, -2), 
+            byrow = TRUE, nrow = 2)
+# compute the inverse of K
+K_inv <- solve(K)
+K_inv
+
+# show that K and K_inv are inverses (i.e., their product is the identity matrix)
+K%*%K_inv
+```
+
+# 6 Eigenvalues and Eigenvectors
+
+```{r}
+eigen(V)
+```
+# 7 Mean Vector, Variance-Covariance Matrix, Scaling
+
+```{r}
+# read in the data set
+lbwt_data <- read_csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/lowbwt.csv")
+# look at the first few observations
+head(lbwt_data)
+# compute the sample mean vector
+apply(lbwt_data, 2, mean)
+# compute the sample variance-covariance matrix
+var(lbwt_data)
+
+# scaling lbwt_data
+lbwt_data_scl <- scale(lbwt_data)
+#get the sample mean vector - see that it matches the mean vector above
+attr(lbwt_data_scl, "scaled:center")
+# get the sample standard deviations - see that these are the square roots of 
+#  the diagonal entries from the sample variance-covariance matrix above
+attr(lbwt_data_scl, "scaled:scale")
+# compute the sample mean vector
+#   (due to computer precision, these are not exactly 0, but close)
+apply(lbwt_data_scl, 2, mean)
+# compute the sample variance-covariance matrix
+var(lbwt_data_scl)
+```
+
+# 8 Distance
+
+```{r}
+# First, create a matrix with each vector as a row:
+M <- matrix(c(1, 5, -1, -2, 3, 2), 
+            byrow = TRUE, nrow = 2)
+M
+# Compute the Euclidean distance between the two rows
+dist(M, method = "euclidean")
+# check
+sqrt(sum((c(1, 5, -1) - c(-2, 3, 2))^2))
+
+# First, create a matrix with each vector as a row:
+M <- matrix(c(1, 5, -1, -2, 3, 2, 0, 1, -3, 3, -1, 8), 
+            byrow = TRUE, nrow = 4) 
+M
+# Compute the Euclidean distance between the two rows
+dist(M, method = "euclidean")
+```
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,477 @@
+---
+title: "PubH 6884 R Lab 8"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+
+```{r Best Subset Selection}
+#| echo: false
+library(ISLR2)
+names(Hitters)
+dim(Hitters)
+sum(is.na(Hitters$Salary))
+
+Hitters <- na.omit(Hitters)
+dim(Hitters)
+sum(is.na(Hitters$Salary))
+
+library(leaps)
+regfit.full <- regsubsets(Salary ~., Hitters)
+summary(regfit.full)
+
+regfit.full <- regsubsets(Salary ~., Hitters, nvmax = 19)
+reg.summary <- summary(regfit.full)
+names(reg.summary)
+reg.summary$rsq
+
+par(mfrow = c(2,2))
+plot(reg.summary$rss, xlab = "Number of Variables",
+     ylab = "RSS", type = "l")
+plot(reg.summary$adjr2, xlab = "Number of Variables",
+     ylab = "Adjusted RSq", type = "l")
+which.max(reg.summary$adjr2)
+plot(reg.summary$adjr2, xlab = "Number of Variables",
+     ylab = "Adjusted RSq", type = "l")
+points(11, reg.summary$adjr2[11], col = "red", cex = 2, pch = 20)
+plot(reg.summary$cp, xlab = "Number of Variables",
+     ylab = "Cp", type = "l")
+which.min(reg.summary$cp)
+points(10, reg.summary$cp[10], col = "red", cex = 2, pch = 20)
+
+which.min(reg.summary$bic)
+plot(reg.summary$bic, xlab = "Number of Variables",
+     ylab = "BIC", type = "l")
+points(6, reg.summary$bic[6], col = "red", cex = 2, pch = 20)
+
+plot(regfit.full, scale = "r2")
+plot(regfit.full, scale = "adjr2")
+plot(regfit.full, scale = "Cp")
+plot(regfit.full, scale = "bic")
+
+coef(regfit.full, 6)
+```
+
+```{r}
+#| echo: false
+regfit.fwd <- regsubsets(Salary ~., Hitters, 
+                         nvmax = 19, method = "forward")
+summary(regfit.fwd)
+regfit.bwd <- regsubsets(Salary ~., Hitters, 
+                         nvmax = 19, method = "backward")
+summary(regfit.bwd)
+
+coef(regfit.full, 7)
+coef(regfit.fwd, 7)
+coef(regfit.bwd, 7)
+```
+
+```{r}
+#| echo: false
+set.seed(1)
+train <- sample(c(TRUE, FALSE), nrow(Hitters), replace = TRUE)
+test <- (!train)
+
+regfit.best <- regsubsets(Salary ~., data = Hitters[train,], nvmax = 19)
+test.mat <- model.matrix(Salary ~ ., data = Hitters[test,])
+
+val.errors <- rep(NA, 19)
+for (i in 1:19) {
+  coefi <- coef(regfit.best, id = i)
+  pred <- test.mat[, names(coefi)] %*% coefi
+  val.errors[i] <- mean((Hitters$Salary[test] - pred)^2)}
+val.errors
+which.min(val.errors)
+coef(regfit.best, 7)
+
+predict.regsubsets <- function(object, newdata, id, ...){
+  form <- as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  mat[, xvars] %*% coefi}
+
+regfit.best <- regsubsets(Salary ~., data = Hitters, nvmax = 19)
+coef(regfit.best, 7)
+
+k <- 10
+n <- nrow(Hitters)
+set.seed(1)
+folds <- sample(rep(1:k, length = n))
+cv.errors <- matrix(NA, k, 19,
+                    dimnames = list(NULL, paste(1:19)))
+
+for (j in 1:k) {
+  best.fit <- regsubsets(Salary ~., 
+                         data = Hitters[folds != j,], 
+                         nvmax = 19)
+  for (i in 1:19){
+    pred <- predict(best.fit, Hitters[folds == j, ], id = i)
+    cv.errors[j,i] <- mean((Hitters$Salary[folds == j] - pred)^2)
+  }
+}
+mean.cv.errors <- apply(cv.errors, 2, mean)
+mean.cv.errors
+
+par(mfrow = c(1,1))
+plot(mean.cv.errors, type = "b")
+
+regfit.best <- regsubsets(Salary ~., data = Hitters, nvmax = 19)
+coef(regfit.best, 10)
+```
+
+# *6.5.2 Ridge Regression and the Lasso*
+
+```{r}
+x <- model.matrix(Salary ~ ., Hitters)[,-1]
+y <- Hitters$Salary
+```
+
+### Ridge Regression
+
+```{r}
+library(glmnet)
+grid <- 10^seq(10, -2, length = 100)
+ridge.mod <- glmnet(x, y, alpha = 0, lambda = grid)
+dim(coef(ridge.mod))
+
+ridge.mod$lambda[50]
+coef(ridge.mod)[,50]
+sqrt(sum(coef(ridge.mod)[-1, 50]^2))
+
+ridge.mod$lambda[60]
+coef(ridge.mod)[,60]
+sqrt(sum(coef(ridge.mod)[-1, 60]^2))
+
+predict(ridge.mod, s = 50, type = "coefficients")[1:20,]
+
+set.seed(1)
+train <- sample(1:nrow(x), nrow(x) /2)
+test <- (-train)
+y.test <- y[test]
+
+ridge.mod <- glmnet(x[train, ], y[train], alpha = 0, 
+                    lambda = grid, thresh = 1e-12)
+ridge.pred <- predict(ridge.mod, s = 4, newx = x[test,])
+# s referes to lambda
+mean((ridge.pred - y.test)^2)
+
+mean((mean(y[train])-y.test)^2)
+ridge.pred <- predict(ridge.mod, s = 1e10, newx = x[test,])
+mean((ridge.pred - y.test)^2)
+
+set.seed(1)
+cv.out <- cv.glmnet(x[train,], y[train], alpha = 0)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+bestlam
+ridge.pred <- predict(ridge.mod, s = bestlam, newx = x[test,])
+mean((ridge.pred - y.test)^2)
+out <- glmnet(x,y, alpha = 0)
+predict(out, type = "coefficients", s = bestlam)[1:20,]
+```
+
+### The Lasso
+
+```{r}
+lasso.mod <- glmnet(x[train,], y[train], alpha = 1, lambda = grid)
+plot(lasso.mod)
+
+set.seed(1)
+cv.out <- cv.glmnet(x[train,], y[train], alpha = 1)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+lasso.pred <- predict(lasso.mod, s = bestlam, newx = x[test,])
+mean((lasso.pred - y.test)^2)
+
+out <- glmnet(x, y, alpha = 1, lambda = grid)
+lasso.coef <- predict(out, type = "coefficients", s = bestlam)[1:20,]
+lasso.coef
+lasso.coef[lasso.coef != 0]
+```
+
+
+# *In-Class Code*
+
+```{r}
+# Lecture 08 R Code
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(plotmo)
+```
+
+
+```{r}
+# load the prostate data
+prostate_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/prostate_data.csv")
+
+# scale predictor variables, split into train/test sets
+prostate_data_sc <- as.data.frame(scale(prostate_data[,1:8]))
+# didn't scale lpsa, so its added to the scaled dataset
+prostate_data_sc$lpsa <- prostate_data$lpsa
+prostate_data_sc$train <- prostate_data$train
+prostate_data_sc_train <- prostate_data_sc[prostate_data_sc$train == TRUE,]
+prostate_data_sc_test <- prostate_data_sc[prostate_data_sc$train == FALSE,]
+
+# linear model with all predictor variables
+lin_mod <- lm(lpsa ~ . - train, data = prostate_data_sc_train)
+summary(lin_mod)
+(coef_lses <- coef(lin_mod))
+```
+
+```{r Ridge Regression with glmnet() and train()} 
+################################################################################
+# Ridge Regression with glmnet() and train()
+################################################################################
+# note on scaling
+
+# ridge regression with glmnet (from glmnet package)
+# the glmnet() function fits the "complete" solution paths
+# x HAS to be a matrix in order for glmnet to work
+prostate_data_sc_train_X <- as.matrix(prostate_data_sc_train[,1:8])
+# is y is numerical, glmnet() automatically assumes you are going to use a linear
+#   model, so make sure you factor if your working with categorical data
+prostate_data_sc_train_Y <- prostate_data_sc_train[,9]
+# alpha = 0 corresponds to ridge regression, alpha = 1 --> LASSO
+prostate_ridge <- glmnet(x = prostate_data_sc_train_X, 
+                         y = prostate_data_sc_train_Y, 
+                         alpha = 0.0)
+# glmnet() automatically runs 100 models
+
+# plot solutions paths (from plotmo package)
+plot_glmnet(prostate_ridge, xvar = "lambda")
+
+# use 10-fold CV to select the tuning parameter lambda
+set.seed(1234)
+prostate_ridge_cv <- cv.glmnet(x = prostate_data_sc_train_X, 
+                               y = prostate_data_sc_train_Y,
+                               alpha = 0.0, nfolds = 10)
+# want to minimize what is in the "Measure" column
+# compares the min and the "best" using the one-se rule
+prostate_ridge_cv
+
+# look at solution corresponding to selected lambda based on minimum 10-fold CV MSE
+# note that this model is fit on the entire training data set
+predict(prostate_ridge, s = prostate_ridge_cv$lambda.min, type = "coef")
+
+# look at solution corresponding to selected lambda based on 10-fold CV MSE with 1SE rule
+predict(prostate_ridge, s = prostate_ridge_cv$lambda.1se, type = "coef")
+
+# predict lpsa in test set for model based on minimum 10-fold CV MSE
+prostate_data_sc_test_X <- as.matrix(prostate_data_sc_test[,1:8])
+pred_ridge_test <- predict(prostate_ridge, s = prostate_ridge_cv$lambda.min, 
+                           newx = prostate_data_sc_test_X)
+
+# compute test MSE based on test set
+mean((prostate_data_sc_test$lpsa - pred_ridge_test)^2)
+
+# note that the results above can also be obtained via the train() 
+#  function from the caret package but we need to specify a grid of values for
+#  tuning parameter lambda; fortunately, we can get this from the glmnet function
+
+# set up a ridge regression tuneGrid object - be sure to set alpha = 0
+tg_ridge <- data.frame(alpha = 0, lambda = prostate_ridge$lambda)
+
+# conduct 10-fold CV to determine optimal lambda value
+set.seed(1234)
+rdg_lpsa_10cv <- train(x = prostate_data_sc_train_X, y = prostate_data_sc_train_Y, 
+                       method = "glmnet", tuneGrid = tg_ridge,
+                       trControl = trainControl(method = "cv", number = 10, 
+                                                selectionFunction = "best"))
+
+rdg_lpsa_10cv
+# note that the selected lambda is the same as the one selected above, this will not be true in general
+
+# warning ok - often happens when a model produces the same or nearly the predictions for all samples - 
+#  as would be the case with the large lambda value of 878.88041366 (largest lambda), see code below 
+check_01 <- glmnet(x = prostate_data_sc_train_X,
+                   y = prostate_data_sc_train_Y, alpha = 0,
+                   lambda = 878.88041366)
+predict(check_01, newx = prostate_data_sc_train_X)
+
+# can use the finalModel object as you would the glmnet object
+# plot solution paths
+plot_glmnet(rdg_lpsa_10cv$finalModel, xvar = "lambda")
+# look at coefficients for selected model
+coef_ridge_lambdamin <- predict(rdg_lpsa_10cv$finalModel, 
+                                s = rdg_lpsa_10cv$bestTune$lambda, 
+                                type = "coef")
+
+# let's compare the ridge estimates with the LSEs
+cbind(LSEs = coef_lses, Ridge = coef_ridge_lambdamin[,1])
+```
+
+
+```{r LASSO Regression with glmnet() and train()}
+################################################################################
+# LASSO Regression with glmnet() and train()
+################################################################################
+# LASSO regression with glmnet (from glmnet package)
+# the glmnet() function fits the "complete" solution paths
+prostate_lasso <- glmnet(x = prostate_data_sc_train_X, 
+                         y = prostate_data_sc_train_Y, 
+                         alpha = 1)
+
+# plot solutions paths (from plotmo package)
+plot_glmnet(prostate_lasso, xvar = "lambda")
+
+# use 10-fold CV to select the tuning parameter lambda
+set.seed(1234)
+prostate_lasso_cv <- cv.glmnet(x = prostate_data_sc_train_X, 
+                               y = prostate_data_sc_train_Y,
+                               alpha = 1, nfolds = 10)
+prostate_lasso_cv
+
+# we can make a plot of the estimated 10-fold CV MSEs and 1SE intervals
+# left dotted vertical line corresponds to lambda giving minimum CV MSE
+# right dotted vertical line corresponds to max lambda whose CV MSE is within 
+#   1SE of the minimum CV MSE
+plot(prostate_lasso_cv)
+
+# look at solution corresponding to selected lambda based on minimum 10-fold CV MSE
+# note that this model is fit on the entire training data set
+predict(prostate_lasso, s = prostate_lasso_cv$lambda.min, type = "coef")
+
+# look at solution corresponding to selected lambda based on 10-fold CV MSE with 1SE rule
+predict(prostate_lasso, s = prostate_lasso_cv$lambda.1se, type = "coef")
+
+# predict lpsa in test set for model based on minimum 10-fold CV MSE
+pred_lasso_test <- predict(prostate_lasso, s = prostate_lasso_cv$lambda.min, 
+                           newx = prostate_data_sc_test_X)
+
+# compute test MSE based on test set
+mean((prostate_data_sc_test$lpsa - pred_lasso_test)^2)
+
+# note that the results above can also be obtained via the train() 
+#  function from the caret package but we need to specify a grid of values for
+#  tuning parameter lambda; fortunately, we can get this from the glmnet function
+
+# set up a ridge regression tuneGrid object - be sure to set alpha = 1
+tg_lasso <- data.frame(alpha = 1, lambda = prostate_lasso$lambda)
+
+# conduct 10-fold CV to determine optimal lambda value
+set.seed(1234)
+lasso_lpsa_10cv <- train(x = prostate_data_sc_train_X, 
+                         y = prostate_data_sc_train_Y, 
+                         method = "glmnet", tuneGrid = tg_lasso,
+                         trControl = trainControl(method = "cv", number = 10, 
+                                                  selectionFunction = "best"))
+
+# warning OK here
+lasso_lpsa_10cv
+
+# can use the finalModel object as you would the glmnet object
+# plot solution paths
+plot_glmnet(lasso_lpsa_10cv$finalModel, xvar = "lambda")
+# look at coefficients for selected model
+coef_lasso_lambdamin <- predict(lasso_lpsa_10cv$finalModel, 
+                                s = lasso_lpsa_10cv$bestTune$lambda, 
+                                type = "coef")
+
+# let's compare the LASSO estimates with the ridge estimates and LSEs
+cbind(LSEs = coef_lses, Ridge = coef_ridge_lambdamin[,1], 
+      LASSO = coef_lasso_lambdamin[,1])
+```
+
+```{r Ridge and LASSO Regression for Classification}
+################################################################################
+# Ridge and LASSO Regression for Classification
+################################################################################
+
+# The glmnet() function can also fit some GLMs via penalized maximum likelihood 
+#  estimation.  Specifically, we can fit binary logistic and multinomial logistic models.
+
+# load the heart data 
+heart_data <- 
+  read_csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/Heart.csv")
+# some subjects have missing values for CA and Thal variables, we will remove these
+heart_data <- heart_data[-which(!complete.cases(heart_data)),]
+head(heart_data)
+# note that some variables are categorical and treated as factor and character variables in R
+
+# set up predictor matrix and response vector
+heart_Y <- heart_data$AHD
+
+# since the predictors are a mix of numerical and categorical variables,
+# it is simplest to set up a model matrix that converts categorical variables
+#  to sets of dummy variables
+f1 <- formula(AHD ~ Age + Sex + ChestPain + RestBP + Chol + Fbs + RestECG + 
+                MaxHR + ExAng + Oldpeak + Slope + Ca + Thal)
+mf <- model.frame(f1, data = heart_data)
+heart_X <- model.matrix(mf, data = heart_data)[,-1] # remove the intercept column
+
+
+# compute the solution paths for a LASSO logistic model with AHD as the response
+#  and the first 13 columns as the predictors using glmnet() and cv.glmnet() 
+heart_lasso <- glmnet(x = heart_X, y = heart_Y, family = "binomial", alpha = 1)
+
+# plot solution paths
+plot_glmnet(heart_lasso, xvar = "lambda")
+
+# determine optimal lambda using 10-fold CV
+set.seed(1234)
+heart_lasso_cv <- cv.glmnet(x = heart_X, y = heart_Y, family = "binomial", 
+                            alpha = 1)
+heart_lasso_cv
+
+# By default the error measure used is the deviance but we may be interested in 
+#  using some other value, like AUC.  To specify this, we can use the type.measure argument
+set.seed(1234)
+heart_lasso_cv_auc <- cv.glmnet(x = heart_X, y = heart_Y, family = "binomial", 
+                                alpha = 1, type.measure = "auc")
+heart_lasso_cv_auc
+
+# look at coefficients for LASSO logistic model with lambda based on 10-fold CV AUC with 1SE rule
+predict(heart_lasso, s = heart_lasso_cv_auc$lambda.1se, type = "coef")
+
+# to do all of this with the train() function we use the following:
+# set up a ridge regression tuneGrid object - be sure to set alpha = 1
+tg_lasso2 <- data.frame(alpha = 1, lambda = heart_lasso$lambda)
+
+# conduct 10-fold CV to determine optimal lambda value
+set.seed(1234)
+lasso_heart_10cv <- train(x = heart_X, y = heart_Y, method = "glmnet", 
+                          family = "binomial", tuneGrid = tg_lasso2,
+                          trControl = trainControl(method = "cv", number = 10, 
+                                                   summaryFunction = twoClassSummary, 
+                                                   classProbs = TRUE, 
+                                                   savePredictions = TRUE,
+                                                   selectionFunction = "oneSE"))
+lasso_heart_10cv
+
+# look at selected model coefficients
+predict(lasso_heart_10cv$finalModel, s = lasso_heart_10cv$bestTune$lambda, 
+        type = "coef")
+
+
+# as with other logistic models, we can determine an optimal threshold 
+# first, provide a sequence of threshold values
+prob_thresh <- seq(0.10, 0.90, by = 0.10)
+
+# use thresholder() function to obtain accuracy measures at each threshold
+#  if we specify final = TRUE, then the model with lambda = 0.1243276 will only be considered
+#  if we specify final = FALSE, then models for all lambdas will be considered (this can be computationally intensive)
+lasso_heart_ths <- thresholder(lasso_heart_10cv, threshold = prob_thresh, 
+                               final = FALSE,
+                               statistics = c("Sensitivity", "Specificity", 
+                                              "Accuracy", "Kappa")) # also try "all" 
+lasso_heart_ths
+
+# which lambda and threshold combination yields highest accuracy
+which.max(lasso_heart_ths$Accuracy)
+# but be careful - there may be multiple combinations that yield the same high accuracy
+lasso_heart_ths[rev(order(lasso_heart_ths$Accuracy)),]
+
+```
+

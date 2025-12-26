@@ -1,0 +1,185 @@
+---
+title: "PubH 6884 R Lab 10"
+author: "Annie Allred"
+title-block-banner: true
+title-block-banner-color: light blue
+format:
+  html:
+    mainfont: Times New Roman
+    fontsize: 15px
+    embed-resources: true
+editor: source
+execute:
+  output: false
+---
+
+```{r}
+#| output: FALSE
+library(rpart)
+library(tidyverse)
+library(rpart.plot)
+library(caret)
+library(randomForest)
+```
+
+# *Regression Tree Example in R*
+
+```{r Regression Tree Example}
+# loading the data set
+prostate_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/prostate_data.csv")
+# training data set
+prostate_data_train <- prostate_data[prostate_data$train, ]
+# testing data set
+prostate_data_test <- prostate_data[!prostate_data$train, ]
+
+# fit a regression tree via recursive partitioning for lpsa on all eight 
+#   predictors using training data
+set.seed(1234)
+rtree_lpsa_01 <- rpart(lpsa ~ lcavol + lweight + age + lbph + svi + lcp + 
+                         gleason + pgg45,
+                       data = prostate_data_train, method = "anova",
+                       control = rpart.control(minsplit = 20, minbucket = 5,
+                                               cp = 0, xval = 10))
+rtree_lpsa_01
+# rpart automatically determines the alpha, (cost complexity parameter) values,
+#   and the corresponding CV error rate (MSE)
+printcp(rtree_lpsa_01)
+# plot CV curve
+plotcp(rtree_lpsa_01)
+
+# will use the cp from printcp w/ 4 nodes bc it is w/in one se of the lowest 
+#   MSE value
+rtree_lpsa_01_sel <- rpart(lpsa ~ lcavol + lweight + age + lbph + svi + lcp + 
+                             gleason + pgg45, 
+                           data = prostate_data_train, method = "anova",
+                           control = rpart.control(minsplit = 20, minbucket = 5,
+                                               cp = 0.053509, xval = 10))
+rpart.plot(rtree_lpsa_01_sel)
+
+# can obtain predictors from the fitted tree
+pred_rtree_lpsa_01_sel <- predict(rtree_lpsa_01_sel, 
+                                  newdata = prostate_data_test)
+pred_rtree_lpsa_01_sel
+
+# can use train() to select alpha and fit the tree
+# look at the alpha (cp) values from the fitted tree and set up values to check
+tg_regtr <- data.frame(cp = rtree_lpsa_01$cptable[,1])
+set.seed(1234)
+rtree_lpsa_10cv <- train(x = as.matrix(prostate_data_train[,1:8]),
+                         y = prostate_data_train$lpsa,
+                         method = "rpart", 
+                         control = rpart.control(minsplit = 20, minbucket = 5),
+                         tuneGrid = tg_regtr, 
+                         trControl = trainControl(method = "cv", number = 10,
+                                                  selectionFunction = "oneSE"))
+rtree_lpsa_10cv
+```
+
+# *Classification Tree Example in R*
+
+```{r Classification Tree Example}
+# data set for heart disease prediction models
+heart_data <- 
+  read.csv("/Users/me/Desktop/GWU/Fall2025/MachineLearning/DataSets/Heart.csv")
+# convert ChestPain and Thal to factor variables
+heart_data$ChestPain <- factor(heart_data$ChestPain)
+heart_data$Thal <- factor(heart_data$Thal)
+# split into training and test sets
+set.seed(1234)
+heart_train_row <- sort(sample(1:303, size = 202))
+heart_test_row <- setdiff(1:303, heart_train_row)
+heart_data_train <- heart_data[heart_train_row,]
+heart_data_test <- heart_data[heart_test_row,]
+
+# remove subject with missing data
+heart_data_train <- heart_data_train[complete.cases(heart_data_train),]
+heart_data_test <- heart_data_test[complete.cases(heart_data_test),]
+
+
+# fit a classification tree via recursive partitioning for heart disease outcome 
+#   using training data
+
+# note that default splitting crit based on gini
+set.seed(1234)
+ctree_heart_01 <- rpart(AHD ~ Age + Sex + ChestPain + RestBP + Chol + Fbs + 
+                          RestECG + MaxHR + ExAng + Oldpeak + Slope + Ca + Thal,
+                        data = heart_data_train, method = "class", 
+                        parms = list(split = "gini"),
+                        control = rpart.control(minsplit = 20, minbucket = 1, 
+                                                cp = 0))
+# get tuning grid for train function
+tg_clatr <- data.frame(cp = ctree_heart_01$cptable[,1])
+
+# when training a classification tree using the train() function, make sure that 
+#   the response is a factor variable
+heart_data_train_X <- heart_data_train[,1:13]
+heart_data_train_Y <- factor(heart_data_train$AHD)
+set.seed(1234)
+ctree_heart_10cv <- train(x = heart_data_train_X, y = heart_data_train_Y,
+                          method = "rpart", parms = list(split = "gini"),
+                          control = rpart.control(minsplit = 20, minbucket = 1),
+                          tuneGrid = tg_clatr,
+                          trControl = trainControl(method = "cv", number = 10,
+                                                   selectionFunction = "oneSE"))
+ctree_heart_10cv
+# plot the selected classification tree
+rpart.plot(ctree_heart_10cv$finalModel)
+
+# can obtain predicted classes from the fitted tree
+pred_ctree_heart <- predict(ctree_heart_10cv$finalModel,
+                            newdata = heart_data_test)
+head(pred_ctree_heart)
+```
+
+# *Bagging with Trees Example* 
+
+```{r Bagging with Trees}
+set.seed(1234)
+bag_lpsa_01 <- randomForest(lpsa ~ lcavol + lweight + age + lbph + svi + lcp + 
+                              gleason + pgg45,
+                            data = prostate_data_train, ntree = 500, mtry = 8,
+                            importance = TRUE)
+bag_lpsa_01
+
+# can plot OOB MSE vs. number of trees
+plot(x = 1:500, y = bag_lpsa_01$mse, 
+     xlab = "Number of Trees B", ylab = "OOB MSE")
+
+# get OOB estimate for RMSE
+sqrt(bag_lpsa_01$mse[500])
+
+# can obtain predicted values
+pred_bag_lpsa <- predict(bag_lpsa_01, newdata = prostate_data_test)
+pred_bag_lpsa
+
+# for fun, find test RMSE
+sqrt(mean((prostate_data_test$lpsa - pred_bag_lpsa)^2))
+
+# can also use the train() function
+set.seed(1234)
+bag_lpsa_10cv <- train(x = as.matrix(prostate_data_train[,1:8]), 
+                       y = prostate_data_train$lpsa,
+                       method = "rf", ntree = 500, 
+                       tuneGrid = data.frame(mtry = 8),
+                       trControl = trainControl(method = "cv", number = 10))
+bag_lpsa_10cv
+
+# make varible importance plot 
+# type = 1 is for %IncMSE, 2 is for IncNodePurity (measured by RSS)
+varImpPlot(bag_lpsa_10cv$finalModel, type = 2, main = "")
+```
+
+# *Random Forest with Regression Trees Example*
+
+```{r Random Forest with Regression Trees}
+set.seed(1234)
+rf_lpsa_10cv <- train(x = as.matrix(prostate_data_train[,1:8]), 
+                       y = prostate_data_train$lpsa,
+                       method = "rf", ntree = 500, 
+                       tuneGrid = data.frame(mtry = 1:8),
+                       trControl = trainControl(method = "cv", number = 10))
+rf_lpsa_10cv
+rf_lpsa_10cv$finalModel
+```
+
